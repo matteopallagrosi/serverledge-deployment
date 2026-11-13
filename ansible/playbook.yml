@@ -1,0 +1,17 @@
+---
+- name: Configure Serverledge Infrastructure
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+    edge_pool_memory: 6144
+    cloud_pool_memory: 14336
+  pre_tasks:
+    - name: Wait until SSH is ready
+      ansible.builtin.wait_for_connection:
+        timeout: 120
+    - name: Gather facts after SSH is ready
+      ansible.builtin.setup:
+  roles:
+    - setup

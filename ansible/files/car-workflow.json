@@ -1,0 +1,61 @@
+{
+  "StartAt": "ResizeImage",
+  "States": {
+    "ResizeImage": {
+      "Type": "Task",
+      "Resource": "resize",
+      "Next": "ParallelAnalysis"
+    },
+    "ParallelAnalysis": {
+      "Type": "Parallel",
+      "Next": "GenerateReport",
+      "Branches": [
+        {
+          "StartAt": "DetectCar",
+          "States": {
+            "DetectCar": {
+              "Type": "Task",
+              "Resource": "mobilenetFunc",
+              "Next": "CropImage"
+            },
+            "CropImage": {
+              "Type": "Task",
+              "Resource": "crop",
+              "Next": "AnalyzeColor"
+            },
+            "AnalyzeColor": {
+              "Type": "Task",
+              "Resource": "color-analyzer",
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "AnalyzeDayNight",
+          "States": {
+            "AnalyzeDayNight": {
+              "Type": "Task",
+              "Resource": "day-night-analyzer",
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "CheckCameraHealth",
+          "States": {
+            "CheckCameraHealth": {
+              "Type": "Task",
+              "Resource": "camera-health-service",
+              "End": true
+            }
+          }
+        }
+      ]
+    },
+    "GenerateReport": {
+      "Type": "Task",
+      "Resource": "report-generator",
+      "End": true
+    }
+  }
+}

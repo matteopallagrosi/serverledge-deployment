@@ -1,0 +1,246 @@
+---
+- name: Sostituisci repository, pulisci cache e forza update
+  ansible.builtin.shell: |
+    sed -i 's/security.ubuntu.com/archive.ubuntu.com/g' /etc/apt/sources.list || true
+    sed -i 's/security.ubuntu.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/*.list || true
+    sed -i 's/security.ubuntu.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/*.sources || true
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+    apt-get update
+  become: true
+
+- name: Aggiorna APT e installa pacchetti base
+  ansible.builtin.apt:
+    update_cache: true
+    name:
+      - git
+      - curl
+      - wget
+      - ca-certificates
+      - make
+      - tmux
+      - htop
+      - python3-pip
+      - python3-venv
+      - glpk-utils
+    state: present
+  become: true
+
+- name: Installa Docker
+  ansible.builtin.shell: curl -fsSL https://get.docker.com | sh
+  become: true
+  args:
+    creates: /usr/bin/docker
+
+- name: Aggiungi utente ubuntu al gruppo docker
+  ansible.builtin.user:
+    name: ubuntu
+    groups: docker
+    append: true
+  become: true
+
+- name: Forza il ricaricamento dei gruppi SSH per abilitare Docker
+  meta: reset_connection
+
+- name: Scarica e installa Go 1.26.7
+  ansible.builtin.unarchive:
+    src: "https://go.dev/dl/go1.26.7.linux-amd64.tar.gz"
+    dest: /usr/local
+    remote_src: true
+  become: true
+
+- name: Aggiungi Go al PATH
+  ansible.builtin.lineinfile:
+    path: /home/ubuntu/.bashrc
+    line: 'export PATH=$PATH:/usr/local/go/bin'
+
+# Setup Client (Locust)
+- name: Installa Locust in un virtual environment sul Client
+  ansible.builtin.pip:
+    name: locust
+    virtualenv: /home/ubuntu/locust_env
+    virtualenv_command: python3 -m venv
+  become: true
+  become_user: ubuntu
+  when: "'client' in group_names"
+
+# Setup etcd (Global Registry)
+- name: Avvia ETCD sul Global Registry
+  ansible.builtin.shell: |
+    docker rm -f etcd || true
+    docker run -d --net host --name etcd quay.io/coreos/etcd:v3.5.9 /usr/local/bin/etcd --advertise-client-urls http://{{ registry_ip }}:2379 --listen-client-urls http://0.0.0.0:2379
+  become: true
+  when: "'registry' in group_names"
+
+# Setup Prometheus (Global Registry)
+- name: Crea file di configurazione per Prometheus
+  ansible.builtin.copy:
+    dest: /tmp/prometheus.yml
+    content: |
+      global:
+        scrape_interval: 15s
+      scrape_configs:
+        - job_name: 'pushgateway'
+          static_configs:
+            - targets: ['{{ registry_ip }}:9091']
+  become: true
+  when: "'registry' in group_names"
+
+- name: Avvia Prometheus Pushgateway e Prometheus
+  ansible.builtin.shell: |
+    docker rm -f pushgateway prometheus || true
+    docker run -d -p 9091:9091 --name pushgateway prom/pushgateway
+    docker run -d -p 9090:9090 --name prometheus -v /tmp/prometheus.yml:/etc/prometheus/prometheus.yml prom/prometheus
+  become: true
+  when: "'registry' in group_names"
+
+# Setup binari Serverledge
+- name: Crea cartella bin per Serverledge
+  ansible.builtin.file:
+    path: /home/ubuntu/serverledge/bin
+    state: directory
+    owner: ubuntu
+    group: ubuntu
+    mode: '0755'
+  become: true
+  when: "'serverledge_nodes' in group_names"
+
+- name: Copia eseguibile Serverledge (Nodi Edge e Cloud)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/serverledge-bin/serverledge"
+    dest: "/home/ubuntu/serverledge/bin/serverledge"
+    owner: ubuntu
+    group: ubuntu
+    mode: '0755'
+  become: true
+  when: "'serverledge_nodes' in group_names"
+
+- name: Copia eseguibile Serverledge-CLI sui nodi
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/serverledge-bin/serverledge-cli"
+    dest: "/home/ubuntu/serverledge/bin/serverledge-cli"
+    owner: ubuntu
+    group: ubuntu
+    mode: '0755'
+  become: true
+  when: "inventory_hostname == groups['edge_nodes'][0]"
+
+- name: Copia eseguibile Load Balancer (Solo su nodo LB)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/serverledge-bin/lb"
+    dest: "/home/ubuntu/serverledge/bin/lb"
+    owner: ubuntu
+    group: ubuntu
+    mode: '0755'
+  become: true
+  when: "'load_balancer' in group_names"
+
+- name: Genera configurazione e avvia EDGE Nodes
+  ansible.builtin.shell: |
+    cat <<EOF > serverledge-conf.yaml
+    api.port: 1323
+    etcd.address: "{{ registry_ip }}:2379"
+    registry.area: "ROME"
+    registry.remote.area: "cloud-ROME"
+    registry.node.id: "{{ inventory_hostname }}"
+    scheduler.policy: "default"
+    workflow.offloading.policy: "ilp"
+    workflow.offloading.policy.optimizer.host: "{{ optimizer_ip }}"
+    workflow.offloading.policy.optimizer.port: 8080
+    workflow.offloading.policy.region.cost:
+      ROME: 0.0
+      cloud-ROME: 2.0
+    container.pool.memory: {{ edge_pool_memory }}
+    workflow.offloading.policy.edge_to_edge_bandwidth: 100.0
+    workflow.offloading.policy.cloud2datastore.bandwidth: 100.0
+    workflow.offloading.policy.node2datastore.bandwidth: 100.0
+    metrics.enabled: true
+    metrics.prometheus.pushgateway.host: "{{ registry_ip }}"
+    metrics.prometheus.pushgateway.port: 9091
+    metrics.prometheus.host: "{{ registry_ip }}"
+    metrics.prometheus.port: 9090
+    metrics.retriever.interval: 10
+    EOF
+    pkill -9 serverledge || true
+    tmux kill-session -t serverledge || true
+    tmux new-session -d -s serverledge './bin/serverledge serverledge-conf.yaml'
+  args:
+    chdir: /home/ubuntu/serverledge
+  become: true
+  become_user: ubuntu
+  when: "'edge_nodes' in group_names"
+
+- name: Genera configurazione e avvia CLOUD Nodes
+  ansible.builtin.shell: |
+    cat <<EOF > serverledge-conf.yaml
+    api.port: 1323
+    etcd.address: "{{ registry_ip }}:2379"
+    registry.area: "cloud-ROME"
+    registry.node.id: "{{ inventory_hostname }}" 
+    scheduler.policy: "localonly"
+    container.pool.memory: {{ cloud_pool_memory }}
+    metrics.enabled: true
+    metrics.prometheus.pushgateway.host: "{{ registry_ip }}"
+    metrics.prometheus.pushgateway.port: 9091
+    EOF
+    tmux kill-session -t serverledge || true
+    tmux new-session -d -s serverledge './bin/serverledge serverledge-conf.yaml'
+  args:
+    chdir: /home/ubuntu/serverledge
+  become: true
+  become_user: ubuntu
+  when: "'cloud_nodes' in group_names"
+
+- name: Avvia Load Balancer
+  ansible.builtin.shell: |
+    cat <<EOF > lb-conf.yaml
+    api.port: 1322
+    etcd.address: "{{ registry_ip }}:2379"
+    registry.area: "cloud-ROME"
+    metrics.enabled: false
+    tracing.enabled: false
+    lb.arch_awareness: false
+    EOF
+    tmux kill-session -t lb || true
+    tmux new-session -d -s lb './bin/lb lb-conf.yaml'
+  args:
+    chdir: /home/ubuntu/serverledge
+  become: true
+  become_user: ubuntu
+  when: "'load_balancer' in group_names"
+
+# Setup ottimizzatore
+- name: Clona Repository HEFTledge sull'Ottimizzatore
+  ansible.builtin.git:
+    repo: "https://{{ lookup('env', 'GITHUB_USER') }}:{{ lookup('env', 'GITHUB_PAT') }}@github.com/matteopallagrosi/serverless-workflow-offloading.git"
+    dest: /home/ubuntu/HEFTledge
+    force: true
+  become: true
+  become_user: ubuntu
+  when: "'optimizer' in group_names"
+
+- name: Crea virtual environment e installa dipendenze (numpy, pulp)
+  ansible.builtin.shell: |
+    python3 -m venv venv
+    ./venv/bin/pip install --upgrade pip
+    if [ -f requirements.txt ]; then
+      ./venv/bin/pip install -r requirements.txt
+    else
+      ./venv/bin/pip install numpy "pulp<4.0.0"
+    fi
+  args:
+    chdir: /home/ubuntu/HEFTledge
+  become: true
+  become_user: ubuntu
+  when: "'optimizer' in group_names"
+
+- name: Avvia Ottimizzatore HEFTless (server.py) in tmux
+  ansible.builtin.shell: |
+    # Termina una eventuale sessione precedente se stiamo rilanciando lo script
+    tmux kill-session -t optimizer || true
+    tmux new-session -d -s optimizer './venv/bin/python3 server.py'
+  args:
+    chdir: /home/ubuntu/HEFTledge
+  become: true
+  become_user: ubuntu
+  when: "'optimizer' in group_names"

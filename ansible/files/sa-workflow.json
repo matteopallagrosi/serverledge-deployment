@@ -1,0 +1,57 @@
+{
+  "Comment": "Parallel Sentiment Analysis",
+  "StartAt": "RetrieveState",
+  "States": {
+    "RetrieveState": {
+      "Type": "Task",
+      "Resource": "sa_retrieve",
+      "Next": "ExtractState"
+    },
+    "ExtractState": {
+      "Type": "Task",
+      "Resource": "sa_extract",
+      "Next": "ParallelAnalysis"
+    },
+    "ParallelAnalysis": {
+      "Type": "Parallel",
+      "Next": "ReportState",
+      "Branches": [
+        {
+          "StartAt": "LATrainState",
+          "States": {
+            "LATrainState": {
+              "Type": "Task",
+              "Resource": "sa_train_la",
+              "Next": "LAEvaluateState"
+            },
+            "LAEvaluateState": {
+              "Type": "Task",
+              "Resource": "sa_evaluate_la",
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "HATrainState",
+          "States": {
+            "HATrainState": {
+              "Type": "Task",
+              "Resource": "sa_train_ha",
+              "Next": "HAEvaluateState"
+            },
+            "HAEvaluateState": {
+              "Type": "Task",
+              "Resource": "sa_evaluate_ha",
+              "End": true
+            }
+          }
+        }
+      ]
+    },
+    "ReportState": {
+      "Type": "Task",
+      "Resource": "sa_report",
+      "End": true
+    }
+  }
+}

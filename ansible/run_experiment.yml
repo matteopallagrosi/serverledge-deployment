@@ -1,0 +1,57 @@
+---
+- name: Run Locust Benchmark
+  hosts: client
+  gather_facts: true
+  vars:
+    duration_sec: 600    # Durata esperimento
+    num_users: 5         # Utenti concorrenti
+    edge_api_ip: "{{ hostvars[groups['edge_nodes'][0]]['ansible_host'] }}"
+  tasks:
+    - name: Set timestamp for local results
+      delegate_to: localhost
+      ansible.builtin.set_fact:
+        local_results_dir: "../results/run-{{ ansible_date_time.iso8601_basic_short }}"
+
+    - name: Create local results directory
+      delegate_to: localhost
+      ansible.builtin.file:
+        path: "{{ local_results_dir }}"
+        state: directory
+
+    - name: Copy locust files to client
+      ansible.builtin.copy:
+        src: "locust/"
+        dest: "/home/ubuntu/locust_dir/"
+
+    - name: Clean previous results on client
+      ansible.builtin.shell: "rm -f /home/ubuntu/locust_dir/locust-results* /home/ubuntu/locust_dir/response_times.txt"
+      ignore_errors: true
+
+    - name: Stop running Locust
+      ansible.builtin.shell: "pkill -f locust"
+      ignore_errors: true
+
+    - name: Run Locust Benchmark
+      ansible.builtin.shell: >
+        /home/ubuntu/locust_env/bin/locust 
+        -f locustfile.py 
+        --headless --csv locust-results 
+        --run-time {{ duration_sec }}s 
+        --users {{ num_users }} 
+        --spawn-rate 2 
+        -H http://{{ edge_api_ip }}:1323
+      args:
+        chdir: "/home/ubuntu/locust_dir"
+      async: 3600
+      poll: 10
+      ignore_errors: true
+
+    - name: Fetch results to local machine
+      ansible.builtin.fetch:
+        src: "/home/ubuntu/locust_dir/{{ item }}"
+        dest: "{{ local_results_dir }}/"
+        flat: yes
+      loop:
+        - "locust-results_stats.csv"
+        - "locust-results_stats_history.csv"
+        - "response_times.txt"

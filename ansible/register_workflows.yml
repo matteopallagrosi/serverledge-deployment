@@ -1,0 +1,54 @@
+---
+# Usa il primo nodo Edge per registrare funzioni e workflow tramite CLI
+- name: Register Functions and Workflows
+  hosts: edge_nodes[0]
+  become: true
+  become_user: ubuntu
+  vars:
+    cli: "/home/ubuntu/serverledge/bin/serverledge-cli"
+  tasks:
+    - name: Create local directory for workflow JSONs
+      ansible.builtin.file:
+        path: /home/ubuntu/workflows
+        state: directory
+
+    - name: Copy Workflow JSON files to the Edge Node
+      ansible.builtin.copy:
+        src: "files/{{ item.src }}"
+        dest: "/home/ubuntu/workflows/{{ item.dest }}"
+      loop:
+        - { src: "sa-workflow.json", dest: "sa-workflow.json" }
+        - { src: "car-workflow.json", dest: "car-workflow.json" }
+
+    - name: Copy input.json for car-detection to Serverledge folder
+      ansible.builtin.copy:
+        src: "files/input.json"
+        dest: "/home/ubuntu/serverledge/input.json"
+
+    - name: Create Sentiment Analysis Functions
+      ansible.builtin.shell: "{{ cli }} create --update --function {{ item.name }} --memory {{ item.mem }} --runtime custom --custom_image mpallagrosi/{{ item.img }}:latest {{ item.args }}"
+      loop:
+        - { name: 'sa_retrieve', mem: '1024', img: 'sa-retrieve', args: '--input "data_url:Text" --output "status:Text" --output "dataset_archive:Text"' }
+        - { name: 'sa_extract', mem: '1024', img: 'sa-extract', args: '--input "dataset_archive:Text" --input "subset:Float" --input "la_max_features:Int" --input "ha_max_features:Int" --output "status:Text" --output "train_data:Text" --output "test_data:Text" --output "la_max_features:Int" --output "ha_max_features:Int"' }
+        - { name: 'sa_train_la', mem: '1024', img: 'sa-train-la', args: '--input "subset:Float" --input "la_max_features:Int" --input "train_data:Text" --input "test_data:Text" --output "status:Text" --output "la_model_data:Text" --output "la_vectorizer_data:Text" --output "subset:Float" --output "test_data:Text"' }
+        - { name: 'sa_train_ha', mem: '1024', img: 'sa-train-ha', args: '--input "subset:Float" --input "ha_max_features:Int" --input "train_data:Text" --input "test_data:Text" --output "status:Text" --output "ha_model_data:Text" --output "ha_vectorizer_data:Text" --output "subset:Float" --output "test_data:Text"' }
+        - { name: 'sa_evaluate_la', mem: '512', img: 'sa-evaluate-la', args: '--input "test_data:Text" --input "subset:Float" --input "la_model_data:Text" --input "la_vectorizer_data:Text" --output "status:Text" --output "la_accuracy:Float"' }
+        - { name: 'sa_evaluate_ha', mem: '512', img: 'sa-evaluate-ha', args: '--input "test_data:Text" --input "subset:Float" --input "ha_model_data:Text" --input "ha_vectorizer_data:Text" --output "status:Text" --output "ha_accuracy:Float"' }
+        - { name: 'sa_report', mem: '256', img: 'sa-report', args: '--input "la_accuracy:Float" --input "ha_accuracy:Float" --output "FinalReport:Text"' }
+
+    - name: Create Car Detection Functions
+      ansible.builtin.shell: "{{ cli }} create -u -f {{ item.name }} --memory {{ item.mem }} --runtime custom --custom_image mpallagrosi/{{ item.img }}:latest {{ item.args }}"
+      loop:
+        - { name: 'resize', mem: '512', img: 'resize', args: '--input "img:Text" --output "img:Text"' }
+        - { name: 'mobilenetFunc', mem: '512', img: 'mobilenet', args: '--input "img:Text" --output "Img:Text" --output "Detections:ArrayText" --output "Count:Int"' }
+        - { name: 'crop', mem: '512', img: 'crop', args: '--input "Img:Text" --input "Detections:ArrayText" --input "Count:Int" --output "Objects:ArrayText"' }
+        - { name: 'color-analyzer', mem: '256', img: 'color-analyzer', args: '--input "Objects:ArrayText" --output "DominantColor:Text"' }
+        - { name: 'day-night-analyzer', mem: '256', img: 'day-night-analyzer', args: '--input "img:Text" --output "DayNightData:Text"' }
+        - { name: 'camera-health-service', mem: '256', img: 'camera-health-service', args: '--input "img:Text" --output "CameraHealthData:Text"' }
+        - { name: 'report-generator', mem: '256', img: 'report-generator', args: '--input "DominantColor:Text,DayNightData:Text,CameraHealthData:Text" --output "Report:Text"' }
+
+    - name: Register Workflows
+      ansible.builtin.shell: "{{ cli }} create-workflow -s /home/ubuntu/workflows/{{ item.file }} -f {{ item.name }}"
+      loop:
+        - { name: 'sentiment-analysis', file: 'sa-workflow.json' }
+        - { name: 'detection', file: 'car-workflow.json' }

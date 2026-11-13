@@ -1,0 +1,26 @@
+---
+- name: Pre-pull Docker images for Workflows
+  hosts: edge_nodes:cloud_nodes
+  become: true
+  tasks:
+    - name: Pull Sentiment Analysis and Car Detection custom images
+      ansible.builtin.command: "docker pull mpallagrosi/{{ item }}:latest"
+      loop:
+        # Immagini Sentiment Analysis
+        - sa-retrieve
+        - sa-extract
+        - sa-train-la
+        - sa-train-ha
+        - sa-evaluate-la
+        - sa-evaluate-ha
+        - sa-report
+        # Immagini Car Detection
+        - resize
+        - mobilenet
+        - crop
+        - color-analyzer
+        - day-night-analyzer
+        - camera-health-service
+        - report-generator
+      register: pull_output
+      changed_when: "'Downloaded newer image' in pull_output.stdout"

@@ -1,0 +1,5 @@
+project       = "serverledge-507513"
+region_edge   = "europe-west8"
+zone_edge     = "europe-west8-a"
+region_cloud  = "us-east4"
+zone_cloud    = "us-east4-a"
