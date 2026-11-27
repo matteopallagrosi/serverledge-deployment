@@ -1,7 +1,7 @@
 variable "project" {
   type        = string
   description = "GCP project id"
-  default     = "serverledge-507513"
+  default     = "serverledge-514609"
 }
 
 # Regione A (Edge) - Milano

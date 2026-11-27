@@ -7,9 +7,9 @@
     num_users: 5         # Utenti concorrenti
     edge_api_ip: "{{ hostvars[groups['edge_nodes'][0]]['ansible_host'] }}"
   tasks:
-    - name: Set timestamp for local results
-      delegate_to: localhost
+    - name: Set experiment metadata
       ansible.builtin.set_fact:
+        experiment_id: "{{ ansible_date_time.iso8601_basic_short }}"
         local_results_dir: "../results/run-{{ ansible_date_time.iso8601_basic_short }}"
 
     - name: Create local results directory
@@ -30,6 +30,20 @@
     - name: Stop running Locust
       ansible.builtin.shell: "pkill -f locust"
       ignore_errors: true
+
+    - name: Record Serverledge log offsets
+      ansible.builtin.shell: |
+        log_file="/home/ubuntu/serverledge/serverledge.log"
+
+        if [ -f "$log_file" ]; then
+          wc -c < "$log_file"
+        else
+          echo 0
+        fi
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['edge_nodes'] + groups['cloud_nodes'] }}"
+      register: serverledge_log_offsets
+      changed_when: false
 
     - name: Run Locust Benchmark
       ansible.builtin.shell: >
@@ -55,3 +69,34 @@
         - "locust-results_stats.csv"
         - "locust-results_stats_history.csv"
         - "response_times.txt"
+
+    - name: Create local node logs directory
+      delegate_to: localhost
+      ansible.builtin.file:
+        path: "{{ local_results_dir }}/node-logs"
+        state: directory
+
+    - name: Extract experiment-specific Serverledge logs
+      ansible.builtin.shell: |
+        log_file="/home/ubuntu/serverledge/serverledge.log"
+
+        output_file="/tmp/serverledge-{{ hostvars[inventory_hostname]['experiment_id'] }}.log"
+
+        offset={{ item.stdout | int }}
+
+        if [ -f "$log_file" ]; then
+          tail -c +$((offset + 1)) "$log_file" > "$output_file"
+        else
+          : > "$output_file"
+        fi
+      delegate_to: "{{ item.item }}"
+      loop: "{{ serverledge_log_offsets.results }}"
+      changed_when: false
+
+    - name: Fetch Serverledge node logs
+      ansible.builtin.fetch:
+        src: "/tmp/serverledge-{{ hostvars[inventory_hostname]['experiment_id'] }}.log"
+        dest: "{{ local_results_dir }}/node-logs/{{ item.item }}.log"
+        flat: true
+      delegate_to: "{{ item.item }}"
+      loop: "{{ serverledge_log_offsets.results }}"

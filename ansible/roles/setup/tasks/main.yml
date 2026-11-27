@@ -163,7 +163,9 @@
     EOF
     pkill -9 serverledge || true
     tmux kill-session -t serverledge || true
-    tmux new-session -d -s serverledge './bin/serverledge serverledge-conf.yaml'
+    : > serverledge.log
+    tmux new-session -d -s serverledge -c /home/ubuntu/serverledge \
+      "bash -lc 'exec ./bin/serverledge serverledge-conf.yaml >> /home/ubuntu/serverledge/serverledge.log 2>&1'"
   args:
     chdir: /home/ubuntu/serverledge
   become: true
@@ -183,8 +185,11 @@
     metrics.prometheus.pushgateway.host: "{{ registry_ip }}"
     metrics.prometheus.pushgateway.port: 9091
     EOF
+    pkill -9 serverledge || true
     tmux kill-session -t serverledge || true
-    tmux new-session -d -s serverledge './bin/serverledge serverledge-conf.yaml'
+    : > serverledge.log
+    tmux new-session -d -s serverledge -c /home/ubuntu/serverledge \
+      "bash -lc 'exec ./bin/serverledge serverledge-conf.yaml >> /home/ubuntu/serverledge/serverledge.log 2>&1'"
   args:
     chdir: /home/ubuntu/serverledge
   become: true
